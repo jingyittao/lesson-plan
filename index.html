@@ -13,7 +13,7 @@
   .hidden { display:none; }
   .btn { transition:all .12s ease; }
   .btn:disabled { opacity:0.5; cursor:not-allowed; }
-  .reason-box { border:1px solid #e5e7eb; padding:8px; border-radius:6px; }
+  .reason-box { border:1px solid #e5e7eb; padding:8px; border-radius:6px; margin-bottom: 8px; }
   .reason-invalid { outline: 2px solid #fca5a5; }
   .small-muted { font-size: 12px; color: #6b7280; }
   body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
@@ -107,17 +107,17 @@
 
           <div class="p-3 rounded flex flex-col">
             <div class="mb-3">
-              <h4 class="font-medium mb-2">选择分数（必填）</h4>
+              <h4 class="font-medium mb-2">总评分（自动求和）</h4>
               <div class="flex items-center gap-3">
-                <input id="score-input" type="number" min="0" step="1" class="w-28 p-2 border rounded" />
+                <input id="score-input" type="number" min="0" step="1" class="w-28 p-2 border rounded bg-gray-100" readonly />
                 <div class="text-sm text-gray-600" id="score-range">范围：0 - 10</div>
                 <div id="score-ok-ind" class="ml-2 text-sm text-green-600 hidden">已选</div>
               </div>
             </div>
 
             <div class="mb-3 flex-1">
-              <h4 class="font-medium mb-2">评分理由（必填）</h4>
-              <div id="reason-container" class="space-y-2"></div>
+              <h4 class="font-medium mb-2">各小项打分与理由（必填）</h4>
+              <div id="reason-container" class="space-y-4"></div>
             </div>
 
             <div class="flex items-center justify-between">
@@ -143,13 +143,10 @@
   </main>
 
 <script>
-/* 严格修改标准加载和选择逻辑，以实现维度 1/2 的物理/化学学科特定标准。 */
-
 const STORAGE_KEY_SCORED = 'teaching_scored_v1';
 const STORAGE_KEY_INDEX = 'teaching_index_v1';
 const STORAGE_KEY_CURRENT_SEL = 'teaching_current_sel_v1';
 
-// default base max values (used when not math/phy/che)
 const DEFAULT_MAXS = {1:10, 2:14, 3:2, 4:2, 5:2};
 const MIN_REASON_LEN = 15;
 
@@ -157,25 +154,21 @@ const state = {
   plans: [],
   idx: 0,
   standards: {},
-  // **新增：存储学科特定标准**
   subjectStandards: {}, 
   currentSelections: {},
   scored: {}
 };
 
-// DOM refs (保持不变)
 const fallbackArea = document.getElementById('fallback-area');
 const fileJsonlInput = document.getElementById('file-jsonl');
 const filesStandardsInput = document.getElementById('files-standards');
 const fallbackLoadBtn = document.getElementById('fallback-load');
-
 const planName = document.getElementById('plan-name');
 const planMeta = document.getElementById('plan-meta');
 const planContent = document.getElementById('plan-content');
 const planQueryDetail = document.getElementById('plan-query-detail'); 
 const planIndex = document.getElementById('plan-index');
 const statsEl = document.getElementById('stats');
-
 const dimensionBtns = document.querySelectorAll('.dimension-btn');
 const standardArea = document.getElementById('standard-area');
 const scoreInput = document.getElementById('score-input');
@@ -183,7 +176,6 @@ const scoreRange = document.getElementById('score-range');
 const scoreOkInd = document.getElementById('score-ok-ind');
 const reasonContainer = document.getElementById('reason-container');
 const currentDimSelected = document.getElementById('current-dim-selected');
-
 const saveDimBtn = document.getElementById('save-dim');
 const submitNextBtn = document.getElementById('submit-next');
 const prevPlanBtn = document.getElementById('prev-plan');
@@ -196,102 +188,74 @@ const totalRuleEl = document.getElementById('total-rule');
 
 let currentDim = 1;
 
-// ---------- Helpers: subject normalization & checks (修改以支持 phy/che/math) ----------
 function normalizeSubject(s) {
   if (!s) return '';
   const str = String(s).toLowerCase();
   if (/物理|physics|phys|phy/.test(str)) return 'phy';
   if (/化学|chemistry|chem|che/.test(str)) return 'che';
   if (/数学|math|mathematics/.test(str)) return 'math';
-  return 'default'; // 统一返回默认
+  return 'default';
 }
 function isPhysics(subject) { return normalizeSubject(subject) === 'phy'; }
 function isChemistry(subject) { return normalizeSubject(subject) === 'che'; }
 function isMath(subject) { return normalizeSubject(subject) === 'math'; }
 
-// ---------- 动态获取满分 (保持不变) ----------
 function getMaxForDim(subject, dim) {
   const s = normalizeSubject(subject);
   if (dim === 1) {
     if (isMath(s)) return 9;
-    // physics/chemistry and default use 10
     return DEFAULT_MAXS[1];
   }
   if (dim === 2) {
     if (isMath(s)) return 11;
-    // physics/chemistry and default use 14
     return DEFAULT_MAXS[2];
   }
   return DEFAULT_MAXS[dim] || 2;
 }
 
-// ---------- parseJsonl (保持不变) ----------
 function parseJsonl(text) {
   const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   const parsed = [];
   lines.forEach((ln,i) => {
     try {
       const obj = JSON.parse(ln);
-      // 提取教案名称（query中“教案：”后的部分）和具体要求
       let query = (obj.query || '').toString().trim();
-      let planName = obj.name ?? obj.title ?? `教案 ${i+1}`;
+      let pName = obj.name ?? obj.title ?? `教案 ${i+1}`;
       let detail = '';
-
       if (query) {
-        // 尝试从 query 中提取教案名称
         const nameMatch = query.match(/教案[：:]([^，,。]+)/);
-        if (nameMatch && nameMatch[1]) {
-           planName = nameMatch[1].trim();
-        }
-        
-        // 提取具体要求（将 query 中 "教案:XXX" 后的所有内容视为具体要求）
+        if (nameMatch && nameMatch[1]) pName = nameMatch[1].trim();
         let detailTemp = query.replace(/教案[：:].*?[\s，,。]*/, '').trim();
-        if (detailTemp.startsWith('要包含')) {
-             detail = detailTemp;
-        } else if (detailTemp) {
-             // 如果内容不以“要包含”开头，但存在，也将其视为要求
-             detail = detailTemp;
-        }
+        detail = detailTemp;
       }
-
       parsed.push({
         id: obj.id ?? `p${i+1}`,
-        name: planName,
+        name: pName,
         subject: (obj.subject ?? obj.category ?? '').toString(),
         category: obj.category ?? '',
         grade: obj.grade ?? null,
         teacher: obj.teacher ?? '',
-        queryDetail: detail, // 新增：教案的具体要求
+        queryDetail: detail,
         content: (obj.content ?? obj.answer ?? obj.text ?? '').toString()
       });
-    } catch (e) {
-      console.warn('jsonl 行解析出错，跳过：', i, e);
-    }
+    } catch (e) { console.warn('jsonl 行解析出错，跳过：', i, e); }
   });
   state.plans = parsed;
 }
 
-// ---------- 核心修改: 选择标准文本 - 优先学科标准（仅 dim 1 & 2） ----------
 function chooseStandardTextForDim(dim, subject) {
   const subjKey = normalizeSubject(subject);
-  
-  // 1. 检查是否为学科标准适用维度 (1 或 2)
   if (dim === 1 || dim === 2) {
-      // 检查当前教案的科目是否有特定标准
-      if ((isPhysics(subjKey) || isChemistry(subjKey)) && state.subjectStandards[subjKey] && state.subjectStandards[subjKey][dim]) {
-          return state.subjectStandards[subjKey][dim];
-      }
-      // 检查数学科目 (虽然要求只针对物理化学，但如果存在数学标准，也应该兼容)
-      if (isMath(subjKey) && state.subjectStandards[subjKey] && state.subjectStandards[subjKey][dim]) {
-          return state.subjectStandards[subjKey][dim];
-      }
+    if ((isPhysics(subjKey) || isChemistry(subjKey)) && state.subjectStandards[subjKey] && state.subjectStandards[subjKey][dim]) {
+      return state.subjectStandards[subjKey][dim];
+    }
+    if (isMath(subjKey) && state.subjectStandards[subjKey] && state.subjectStandards[subjKey][dim]) {
+      return state.subjectStandards[subjKey][dim];
+    }
   }
-
-  // 2. 回退到通用标准 (包括 dim 3, 4, 5 以及没有特定标准的学科/维度)
   return state.standards[dim] || `（维度 ${dim} 标准未找到）`;
 }
 
-// ---------- 根据学科与维度返回理由数量 (保持不变) ----------
 function getReasonCountForDim(subject, dim) {
   const s = normalizeSubject(subject);
   if (dim === 1) {
@@ -307,7 +271,6 @@ function getReasonCountForDim(subject, dim) {
   return 1;
 }
 
-// ---------- localStorage helpers (保持不变) ----------
 function saveToLocalStorage(){
   try {
     localStorage.setItem(STORAGE_KEY_SCORED, JSON.stringify(state.scored));
@@ -318,6 +281,7 @@ function saveToLocalStorage(){
     localStorage.setItem(STORAGE_KEY_CURRENT_SEL, JSON.stringify(mapping));
   } catch (e) { console.warn('localStorage save failed', e); }
 }
+
 function loadFromLocalStorage(){
   try {
     const scoredRaw = localStorage.getItem(STORAGE_KEY_SCORED);
@@ -327,51 +291,38 @@ function loadFromLocalStorage(){
   } catch (e) { console.warn('localStorage load failed', e); }
 }
 
-// ---------- 核心修改: tryFetchAll - 尝试加载所有标准文件（包括物理/化学学科标准） ----------
 async function tryFetchAll() {
-  // 定义需要加载的学科前缀和维度
-  const subjectsToLoad = { 'phy': 'standard-phy-', 'che': 'standard-che-', 'math': 'standard-math-' }; // 保持兼容性，但重点是 phy/che
+  const subjectsToLoad = { 'phy': 'standard-phy-', 'che': 'standard-che-', 'math': 'standard-math-' };
   const dimsToLoad = [1, 2];
   let standardLoaded = false;
-  
-  // 1. 尝试加载通用标准 (Dim 1-5)
   for (let i=1;i<=5;i++){
     try {
       const r = await fetch(`standard-${i}.txt`);
       if (r.ok) { state.standards[i] = await r.text(); standardLoaded = true; }
     } catch(e){}
   }
-
-  // 2. 尝试加载学科特定标准 (仅 Dim 1 & 2)
   for (const subjKey in subjectsToLoad) {
     state.subjectStandards[subjKey] = state.subjectStandards[subjKey] || {};
     for (const dim of dimsToLoad){
-        try {
-            const r = await fetch(`${subjectsToLoad[subjKey]}${dim}.text`);
-            if (r.ok) { state.subjectStandards[subjKey][dim] = await r.text(); standardLoaded = true; }
-        } catch(e){}
+      try {
+        const r = await fetch(`${subjectsToLoad[subjKey]}${dim}.txt`);
+        if (r.ok) { state.subjectStandards[subjKey][dim] = await r.text(); standardLoaded = true; }
+      } catch(e){}
     }
   }
-
-  // 3. 尝试加载教案数据 (假设文件名是 teaching-plans.jsonl)
   try {
-    const r2 = await fetch('math_cleaned_answers_with_query.jsonl'); // 沿用原代码中的文件名
+    const r2 = await fetch('math_cleaned_answers_with_query.jsonl');
     if (!r2.ok) throw new Error('jsonl 缺失');
     const txt = await r2.text();
     parseJsonl(txt);
-    
-    // 使用新的选择逻辑来初始化标准区域
     standardArea.innerText = chooseStandardTextForDim(1, state.plans[0]?.subject) || '（无标准）';
     return true;
   } catch (e) {
-    console.warn('fetch 数据失败：', e);
-    // 即使教案加载失败，如果标准文件加载了，也显示第一个维度标准
     if (standardLoaded) standardArea.innerText = chooseStandardTextForDim(1, null) || '（无标准）';
     return false;
   }
 }
 
-// ---------- 核心修改: fallbackLoad - 解析本地上传的标准文件（识别学科） ----------
 fallbackLoadBtn.addEventListener('click', ()=> {
   const stdFiles = Array.from(filesStandardsInput.files || []);
   stdFiles.forEach(f => {
@@ -379,374 +330,249 @@ fallbackLoadBtn.addEventListener('click', ()=> {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target.result;
-      // 匹配 standard-[subj]-[dim].txt (如 standard-phy-1.txt) 或 standard-[dim].txt
       const m = name.match(/standard[-_](?:(phy|che|math)[-_])?(\d)\.txt/);
-      
       if (m) {
-        const subjCode = m[1]; // 'phy', 'che', 'math' 或 undefined
-        const dim = Number(m[2]); // 1, 2, 3, 4, 5
-        
-        // 只存储维度 1/2 的学科标准
+        const subjCode = m[1];
+        const dim = Number(m[2]);
         if (subjCode && (dim === 1 || dim === 2)) {
-            state.subjectStandards[subjCode] = state.subjectStandards[subjCode] || {};
-            state.subjectStandards[subjCode][dim] = text;
-        } 
-        // 存储通用标准
-        else if (!subjCode && dim >= 1 && dim <= 5) {
-            state.standards[dim] = text;
-        } else if (dim >= 1 && dim <= 5) {
-             // 如果是维度 3/4/5 的学科文件，也作为通用标准存储，防止通用标准缺失
-            state.standards[dim] = text;
-        } else {
-             // 忽略不规范文件
-            console.warn(`忽略文件 ${name}：文件名格式不符合预期。`);
-        }
-      } else {
-        // 尝试匹配 standardN.txt (如 standard1.txt)
-        const m2 = name.match(/standard[-_]?(\d)/);
-        if (m2 && m2[1]) {
-            const dim = Number(m2[1]);
-            if (dim >= 1 && dim <= 5) state.standards[dim] = text;
-        } else {
-            // 文件名不规范，尝试填补通用的空位
-            for (let k = 1; k <= 5; k++) {
-              if (!state.standards[k]) { state.standards[k] = text; break; }
-            }
+          state.subjectStandards[subjCode] = state.subjectStandards[subjCode] || {};
+          state.subjectStandards[subjCode][dim] = text;
+        } else if (!subjCode && dim >= 1 && dim <= 5) {
+          state.standards[dim] = text;
         }
       }
-
       standardArea.innerText = chooseStandardTextForDim(currentDim, state.plans[state.idx]?.subject) || state.standards[currentDim] || '（无标准）';
     };
     reader.readAsText(f);
   });
-
   const jf = fileJsonlInput.files && fileJsonlInput.files[0];
-  if (!jf) { alert('请先选择 teaching-plans.jsonl 文件'); return; }
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    parseJsonl(ev.target.result);
-    fallbackArea.classList.add('hidden');
-    if (state.plans.length) { 
-        state.idx = 0; 
-        renderPlan(0); 
-        updateStats(); 
-        alert('已加载本地教案（回退）'); 
-    }
-    else alert('未解析到任何教案，请检查 jsonl 格式');
-  };
-  reader.readAsText(jf);
+  if (jf) {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      parseJsonl(ev.target.result);
+      fallbackArea.classList.add('hidden');
+      if (state.plans.length) { state.idx = 0; renderPlan(0); updateStats(); }
+    };
+    reader.readAsText(jf);
+  }
 });
 
-// ---------- renderPlan (使用新的标准获取逻辑) ----------
 function renderPlan(idx) {
-  if (!state.plans.length) {
-    planName.innerText = '未加载教案';
-    planContent.innerText = '请加载 teaching-plans.jsonl';
-    planMeta.innerHTML = '';
-    planQueryDetail.innerText = '（无要求信息）'; 
-    return;
-  }
-  if (idx < 0) idx = 0;
-  if (idx >= state.plans.length) idx = state.plans.length - 1;
+  if (!state.plans.length) return;
   state.idx = idx;
   const p = state.plans[idx];
   planName.innerText = p.name || `教案 ${idx+1}`;
-  const parts = [];
-  if (p.subject) parts.push(p.subject);
-  if (p.grade) parts.push(p.grade);
-  if (p.teacher) parts.push(p.teacher);
-  planMeta.innerText = parts.join(' · ');
+  planMeta.innerText = [p.subject, p.grade, p.teacher].filter(Boolean).join(' · ');
   planContent.innerText = p.content || '（无正文）';
-  planQueryDetail.innerText = p.queryDetail || '（无要求信息）'; // 显示具体要求
+  planQueryDetail.innerText = p.queryDetail || '（无要求信息）';
   planIndex.innerText = `当前：${idx+1} / ${state.plans.length}`;
 
-  // restore currentSelections from mapping if present
-  try {
-    const mappingRaw = localStorage.getItem(STORAGE_KEY_CURRENT_SEL);
-    if (mappingRaw) {
-      const map = JSON.parse(mappingRaw);
-      const pid = p.id;
-      if (pid && map[pid]) state.currentSelections = map[pid];
-      else if (state.scored[p.id]) state.currentSelections = JSON.parse(JSON.stringify(state.scored[p.id].scores));
-      else state.currentSelections = {};
-    } else if (state.scored[p.id]) state.currentSelections = JSON.parse(JSON.stringify(state.scored[p.id].scores));
-    else state.currentSelections = {};
-  } catch(e){ state.currentSelections = {}; }
+  const mappingRaw = localStorage.getItem(STORAGE_KEY_CURRENT_SEL);
+  const map = mappingRaw ? JSON.parse(mappingRaw) : {};
+  state.currentSelections = map[p.id] || (state.scored[p.id] ? JSON.parse(JSON.stringify(state.scored[p.id].scores)) : {});
 
-  // update dimension button labels according to subject
   updateDimensionButtonLabels(p.subject);
-
-  // update standard area for current dimension and subject
-  // !!! 使用新的 chooseStandardTextForDim 来获取正确的标准 !!!
-  standardArea.innerText = chooseStandardTextForDim(currentDim, p.subject) || state.standards[currentDim] || '（无标准）';
-
   setCurrentDimension(currentDim || 1);
   updateDimensionProgress();
   updateStats();
   prevPlanBtn.disabled = idx <= 0;
   nextPlanBtn.disabled = idx >= state.plans.length - 1;
-  exportCurrentBtn.disabled = !(p && state.scored[p.id]);
-  exportAllBtn.disabled = Object.keys(state.scored).length === 0;
 }
 
-// ---------- 更新维度按钮文本以显示满分 (保持不变) ----------
 function updateDimensionButtonLabels(subject) {
-  const names = ['结构完整性','内容准确性','内容一致性','语言逻辑性','素养导向性'];
   dimensionBtns.forEach((btn, i) => {
-    const dim = i+1;
-    const max = getMaxForDim(subject, dim);
-    btn.innerText = `${names[i]}（满分${max}）`;
+    btn.innerText = `${['结构完整性','内容准确性','内容一致性','语言逻辑性','素养导向性'][i]}（满分${getMaxForDim(subject, i+1)}）`;
   });
-  // update displayed total rule text
-  const max1 = getMaxForDim(subject,1);
-  const max2 = getMaxForDim(subject,2);
-  totalRuleEl.innerText = `总分规则：维度1 满分${max1}，维度2 满分${max2}，维度3/4/5 各满分2`;
+  totalRuleEl.innerText = `总分规则：维度1 满分${getMaxForDim(subject,1)}，维度2 满分${getMaxForDim(subject,2)}，维度3/4/5 各满分2`;
 }
 
-// ---------- stats (保持不变) ----------
 function updateStats(){
   statsEl.innerText = `当前：${state.plans[state.idx]?.name ?? '未加载'} | 总数：${state.plans.length} 份 | 已评分：${Object.keys(state.scored).length}`;
-  document.getElementById('dimension-progress').innerText = `已完成 ${countDoneDims()} / 5`;
+  updateDimensionProgress();
 }
 
-// ---------- dimension UI - setCurrentDimension (使用新的标准获取逻辑) ----------
 dimensionBtns.forEach(b => b.addEventListener('click', ()=> setCurrentDimension(Number(b.dataset.dimension))));
 
 function setCurrentDimension(dim) {
   currentDim = dim;
-  state.currentDimension = dim;
   dimensionBtns.forEach(b => b.classList.toggle('dimension-active', Number(b.dataset.dimension) === dim));
   const p = state.plans[state.idx];
-  // !!! 使用新的 chooseStandardTextForDim 来获取正确的标准 !!!
-  standardArea.innerText = chooseStandardTextForDim(dim, p?.subject) || state.standards[dim] || '（无标准）';
+  standardArea.innerText = chooseStandardTextForDim(dim, p?.subject);
 
-  // dynamic max for current plan's subject
-  const subj = p?.subject;
-  const maxForDim = getMaxForDim(subj, dim);
-  scoreInput.min = 0;
-  scoreInput.max = maxForDim;
+  const maxForDim = getMaxForDim(p?.subject, dim);
   scoreRange.innerText = `范围：0 - ${maxForDim}`;
 
   renderReasonInputsForDim(dim);
   const cur = state.currentSelections[dim] || null;
-  if (cur && typeof cur.score === 'number') {
-    scoreInput.value = cur.score;
-    scoreOkInd.classList.remove('hidden');
-    scoreOkInd.innerText = '已选';
-  } else {
-    scoreInput.value = '';
-    scoreOkInd.classList.add('hidden');
-  }
+  scoreInput.value = (cur && typeof cur.score === 'number') ? cur.score : '';
+  scoreOkInd.classList.toggle('hidden', !cur);
+  
   fillReasonInputs(cur);
   currentDimSelected.innerText = `当前维度：${dim}`;
+  
+  // 维度 1、2 强制由子项求和，设为只读
+  if(dim === 1 || dim === 2) {
+    scoreInput.classList.add('bg-gray-100');
+    scoreInput.readOnly = true;
+  } else {
+    scoreInput.classList.remove('bg-gray-100');
+    scoreInput.readOnly = false;
+  }
+  
   updateSubmitButtonState();
 }
 
 function renderReasonInputsForDim(dim){
   reasonContainer.innerHTML = '';
   const p = state.plans[state.idx] || {};
-  const subject = p.subject || p.category || '';
-  const count = getReasonCountForDim(subject, dim);
+  const count = getReasonCountForDim(p.subject, dim);
 
   if (count > 1) {
-    for (let i=0;i<count;i++){
+    for (let i=0; i<count; i++){
       const wrapper = document.createElement('div');
-      wrapper.className = 'reason-box';
-      const prefix = `${dim}.${i+1}`;
-      // *** 新增：在每个评分理由上方增加一个简易打分栏 ***
+      wrapper.className = 'reason-box bg-white shadow-sm border-l-4 border-blue-500 p-3';
       wrapper.innerHTML = `
         <div class="flex items-center justify-between mb-2">
-            <label class="text-xs text-gray-600 font-bold">${prefix} 评分理由</label>
+            <label class="text-xs font-bold text-gray-700">${dim}.${i+1} 评分项</label>
             <div class="flex items-center gap-1">
-                <span class="text-xs text-gray-500">打分:</span>
-                <input type="number" class="w-16 p-1 text-xs border rounded sub-score-input" data-idx="${i}" placeholder="分数" />
+                <span class="text-xs text-gray-500">分值:</span>
+                <input type="number" class="w-16 p-1 text-xs border rounded sub-score-input" data-idx="${i}" placeholder="必填" />
             </div>
         </div>
-        <textarea class="w-full p-2 mt-1 reason-field" data-idx="${i}" rows="3" placeholder="请输入至少${MIN_REASON_LEN}个字的理由（必填）"></textarea>
+        <textarea class="w-full p-2 text-sm border rounded reason-field" data-idx="${i}" rows="2" placeholder="填写不少于${MIN_REASON_LEN}字的理由..."></textarea>
       `;
       reasonContainer.appendChild(wrapper);
     }
+    
+    // 自动求和逻辑
+    reasonContainer.querySelectorAll('.sub-score-input').forEach(input => {
+        input.addEventListener('input', () => {
+            let total = 0;
+            reasonContainer.querySelectorAll('.sub-score-input').forEach(si => total += Number(si.value || 0));
+            scoreInput.value = total;
+        });
+    });
   } else {
     const wrapper = document.createElement('div');
-    wrapper.className = 'reason-box';
+    wrapper.className = 'reason-box p-3';
     wrapper.innerHTML = `
-      <label class="text-xs text-gray-600">评分理由（至少${MIN_REASON_LEN}字）</label>
-      <textarea id="single-reason" class="w-full p-2 mt-1" rows="6" placeholder="请输入至少${MIN_REASON_LEN}个字的评分理由（必填）"></textarea>
+      <label class="text-xs font-bold text-gray-700">评分理由（至少${MIN_REASON_LEN}字）</label>
+      <textarea id="single-reason" class="w-full p-2 mt-1 border rounded text-sm" rows="6" placeholder="请填写理由..."></textarea>
     `;
     reasonContainer.appendChild(wrapper);
   }
 }
 
 function fillReasonInputs(cur){
-  if (!cur) {
-    if (currentDim===1 || currentDim===2) {
-        document.querySelectorAll('.reason-field').forEach(tf=> tf.value = '');
-        document.querySelectorAll('.sub-score-input').forEach(si=> si.value = '');
-    }
-    else { const s = document.getElementById('single-reason'); if (s) s.value = ''; }
-    return;
-  }
-  if (currentDim===1 || currentDim===2) {
-    const arr = Array.isArray(cur.reason) ? cur.reason : (String(cur.reason || '') ? [String(cur.reason)] : []);
-    const subScoresArr = Array.isArray(cur.subScores) ? cur.subScores : [];
-    document.querySelectorAll('.reason-field').forEach((tf, idx) => { tf.value = arr[idx] || ''; });
-    // *** 新增：回显打分栏的分数 ***
-    document.querySelectorAll('.sub-score-input').forEach((si, idx) => { si.value = subScoresArr[idx] || ''; });
+  if (currentDim === 1 || currentDim === 2) {
+    const arr = (cur && Array.isArray(cur.reason)) ? cur.reason : [];
+    const subScoresArr = (cur && Array.isArray(cur.subScores)) ? cur.subScores : [];
+    document.querySelectorAll('.reason-field').forEach((tf, idx) => tf.value = arr[idx] || '');
+    document.querySelectorAll('.sub-score-input').forEach((si, idx) => si.value = subScoresArr[idx] ?? '');
   } else {
     const s = document.getElementById('single-reason');
-    if (s) s.value = cur.reason || '';
+    if (s) s.value = (cur && cur.reason) ? cur.reason : '';
   }
 }
 
-// ---------- save dimension (保持不变) ----------
 saveDimBtn.addEventListener('click', () => {
-  const sValRaw = scoreInput.value;
   const subj = state.plans[state.idx]?.subject;
   const maxAllowed = getMaxForDim(subj, currentDim);
-  const sVal = sValRaw === '' ? null : Number(sValRaw);
-  if (sVal === null || isNaN(sVal)) { alert('请填写当前维度的分数（数字）'); return; }
-  if (sVal < 0 || sVal > maxAllowed) { alert(`分数范围不合法，请输入 0 到 ${maxAllowed} 的整数`); return; }
+  const sVal = scoreInput.value === '' ? null : Number(scoreInput.value);
+
+  if (sVal === null || isNaN(sVal)) { alert('请填写分数'); return; }
+  if (sVal < 0 || sVal > maxAllowed) { alert(`总分(${sVal})超限，满分为 ${maxAllowed}`); return; }
 
   if (currentDim === 1 || currentDim === 2) {
     const fields = Array.from(document.querySelectorAll('.reason-field'));
-    const arr = fields.map(f => f.value.trim());
-    
-    // *** 新增：读取并存储每个理由上方的分数 ***
-    const subScores = Array.from(document.querySelectorAll('.sub-score-input')).map(si => si.value);
+    const scoreFields = Array.from(document.querySelectorAll('.sub-score-input'));
+    const reasons = fields.map(f => f.value.trim());
+    const subScores = scoreFields.map(s => s.value.trim());
 
-    const invalidIdx = arr.findIndex(x => (x || '').length < MIN_REASON_LEN);
-    if (invalidIdx !== -1) {
-      alert(`第 ${invalidIdx+1} 个理由少于 ${MIN_REASON_LEN} 字，请补充。`);
-      fields.forEach((f, i) => f.classList.toggle('reason-invalid', (arr[i]||'').length < MIN_REASON_LEN));
+    if (subScores.some(v => v === "")) { alert('请完成所有小项的打分'); return; }
+    const invIdx = reasons.findIndex(x => x.length < MIN_REASON_LEN);
+    if (invIdx !== -1) {
+      alert(`第 ${invIdx+1} 项理由不足 ${MIN_REASON_LEN} 字`);
+      fields[invIdx].classList.add('reason-invalid');
       return;
     }
-    fields.forEach(f=> f.classList.remove('reason-invalid'));
-    state.currentSelections[currentDim] = { score: sVal, reason: arr, subScores: subScores };
+    state.currentSelections[currentDim] = { score: sVal, reason: reasons, subScores: subScores.map(Number) };
   } else {
     const s = document.getElementById('single-reason');
     const txt = s ? s.value.trim() : '';
-    if (!txt || txt.length < MIN_REASON_LEN) { alert(`理由需至少 ${MIN_REASON_LEN} 字，请补充`); if (s) s.classList.add('reason-invalid'); return; }
-    if (s) s.classList.remove('reason-invalid');
+    if (txt.length < MIN_REASON_LEN) { alert(`理由不足 ${MIN_REASON_LEN} 字`); return; }
     state.currentSelections[currentDim] = { score: sVal, reason: txt };
   }
 
-  scoreOkInd.classList.remove('hidden'); scoreOkInd.innerText = '已保存';
+  scoreOkInd.classList.remove('hidden');
+  scoreOkInd.innerText = '已保存';
   updateDimensionProgress();
   updateSubmitButtonState();
   saveToLocalStorage();
-  exportAllBtn.disabled = Object.keys(state.scored).length === 0;
 });
 
-// ---------- submit and next (保持不变) ----------
 submitNextBtn.addEventListener('click', () => {
-  for (let d=1; d<=5; d++){
-    const v = state.currentSelections[d];
-    if (!v || typeof v.score !== 'number') { alert('请先完成所有维度的评分并保存（每个维度都需保存）'); return; }
-    if (d===1 || d===2) {
-      const needed = getReasonCountForDim(state.plans[state.idx]?.subject, d);
-      if (!Array.isArray(v.reason) || v.reason.length !== needed || v.reason.some(r => (r||'').length < MIN_REASON_LEN)) {
-        alert(`维度 ${d} 的每个理由都必须至少 ${MIN_REASON_LEN} 个字，请检查并补全`);
-        return;
-      }
-    } else {
-      if (!(v.reason && String(v.reason).trim().length >= MIN_REASON_LEN)) {
-        alert(`第 ${d} 个维度的理由需至少 ${MIN_REASON_LEN} 字，请补充`);
-        return;
-      }
-    }
-  }
-
   const p = state.plans[state.idx];
-  const total = Number(state.currentSelections[1].score)
-              + Number(state.currentSelections[2].score)
-              + Number(state.currentSelections[3].score)
-              + Number(state.currentSelections[4].score)
-              + Number(state.currentSelections[5].score);
-  state.scored[p.id] = {
-    id: p.id,
-    name: p.name,
-    scores: JSON.parse(JSON.stringify(state.currentSelections)),
-    total,
-    time: new Date().toISOString()
-  };
-
+  let total = 0;
+  for (let d=1; d<=5; d++) {
+    if (!state.currentSelections[d]) { alert(`维度 ${d} 尚未保存`); return; }
+    total += Number(state.currentSelections[d].score);
+  }
+  state.scored[p.id] = { id: p.id, name: p.name, scores: JSON.parse(JSON.stringify(state.currentSelections)), total, time: new Date().toISOString() };
   saveToLocalStorage();
   state.currentSelections = {};
   if (state.idx < state.plans.length - 1) renderPlan(state.idx + 1);
-  else { updateStats(); alert('已完成最后一份教案评分，评分已保存到本地（localStorage）。'); }
+  else alert('全部完成！');
   updateStats();
-  exportAllBtn.disabled = Object.keys(state.scored).length === 0;
 });
 
-// prev / next (保持不变)
 prevPlanBtn.addEventListener('click', ()=> { if (state.idx > 0) renderPlan(state.idx - 1); });
 nextPlanBtn.addEventListener('click', ()=> { if (state.idx < state.plans.length - 1) renderPlan(state.idx + 1); });
 
-// ---------- helpers: progress (保持不变) ----------
-function updateDimensionProgress(){ const done = countDoneDims(); dimensionProgressEl.innerText = `已完成 ${done} / 5`; document.getElementById('dimension-progress').innerText = `已完成 ${done} / 5`; }
 function countDoneDims(){
   let c=0;
   for (let d=1; d<=5; d++){
     const v = state.currentSelections[d];
     if (v && typeof v.score === 'number') {
-      if (d===1 || d===2) {
+      if (d<=2) {
         const needed = getReasonCountForDim(state.plans[state.idx]?.subject, d);
-        if (Array.isArray(v.reason) && v.reason.length===needed && v.reason.every(r=> (r||'').length>=MIN_REASON_LEN)) c++;
-      } else {
-        if (v.reason && String(v.reason).trim().length>=MIN_REASON_LEN) c++;
-      }
+        if (Array.isArray(v.reason) && v.reason.length===needed && v.reason.every(r=>r.length>=MIN_REASON_LEN)) c++;
+      } else if (v.reason && v.reason.length>=MIN_REASON_LEN) c++;
     }
   }
-  exportCurrentBtn.disabled = !(state.plans[state.idx] && state.scored[state.plans[state.idx].id]);
-  exportAllBtn.disabled = Object.keys(state.scored).length === 0;
   return c;
 }
-function updateSubmitButtonState(){ const ready = countDoneDims() === 5; submitNextBtn.disabled = !ready; const p = state.plans[state.idx]; exportCurrentBtn.disabled = !(p && state.scored[p.id]); exportAllBtn.disabled = Object.keys(state.scored).length === 0; }
 
-// ---------- export current / all (保持不变) ----------
+function updateDimensionProgress(){ 
+    const done = countDoneDims();
+    dimensionProgressEl.innerText = `已完成 ${done} / 5`; 
+}
+
+function updateSubmitButtonState(){ submitNextBtn.disabled = countDoneDims() !== 5; exportCurrentBtn.disabled = !state.scored[state.plans[state.idx]?.id]; exportAllBtn.disabled = Object.keys(state.scored).length === 0; }
+
 exportCurrentBtn.addEventListener('click', () => {
   const p = state.plans[state.idx];
-  if (!p) { alert('当前无教案'); return; }
   const entry = state.scored[p.id];
-  if (!entry) { alert('当前教案尚未提交评分，无法导出'); return; }
   const blob = new Blob([JSON.stringify(entry, null, 2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url;
-  a.download = `${(entry.name||p.id).replace(/[\/\\]/g,'_')}_score_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
-  a.click(); URL.revokeObjectURL(url);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `Score_${p.name}.json`; a.click();
 });
+
 exportAllBtn.addEventListener('click', () => {
-  const arr = Object.values(state.scored);
-  if (!arr.length) { alert('暂无评分数据可导出'); return; }
-  const blob = new Blob([JSON.stringify(arr, null, 2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url;
-  a.download = `all_scored_plans_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
-  a.click(); URL.revokeObjectURL(url);
+  const blob = new Blob([JSON.stringify(Object.values(state.scored), null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `All_Scores.json`; a.click();
 });
 
-// ---------- reload / initial load (保持不变) ----------
-reloadBtn.addEventListener('click', async () => {
-  const ok = await tryFetchAll();
-  if (ok) { fallbackArea.classList.add('hidden'); if (state.plans.length) renderPlan(0); alert('fetch 加载成功'); }
-  else { fallbackArea.classList.remove('hidden'); alert('fetch 仍失败，请使用回退上传或启动本地静态服务器'); }
-});
+reloadBtn.addEventListener('click', async () => { if(await tryFetchAll()) renderPlan(0); });
 
-// initial (保持不变)
 document.addEventListener('DOMContentLoaded', async () => {
   const ok = await tryFetchAll();
   loadFromLocalStorage();
   if (!ok) fallbackArea.classList.remove('hidden');
-  if (state.plans.length) {
-    if (state.idx < 0 || state.idx >= state.plans.length) state.idx = 0;
-    renderPlan(state.idx);
-  }
+  if (state.plans.length) renderPlan(state.idx);
   updateStats();
-  setCurrentDimension(1);
 });
-
-// helper escape (not used, but kept)
-function escapeHtml(s){ return s?.toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') || ''; }
 </script>
 </body>
 </html>

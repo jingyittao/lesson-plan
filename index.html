@@ -514,11 +514,32 @@ saveDimBtn.addEventListener('click', () => {
 submitNextBtn.addEventListener('click', () => {
   const p = state.plans[state.idx];
   let total = 0;
+  const finalScores = {};
+  
   for (let d=1; d<=5; d++) {
     if (!state.currentSelections[d]) { alert(`维度 ${d} 尚未保存`); return; }
+    
+    // 如果是前两个维度，只导出总评分和理由，不导出小项分值
+    if (d === 1 || d === 2) {
+      finalScores[d] = {
+        score: state.currentSelections[d].score,
+        reason: state.currentSelections[d].reason
+      };
+    } else {
+      finalScores[d] = JSON.parse(JSON.stringify(state.currentSelections[d]));
+    }
+    
     total += Number(state.currentSelections[d].score);
   }
-  state.scored[p.id] = { id: p.id, name: p.name, scores: JSON.parse(JSON.stringify(state.currentSelections)), total, time: new Date().toISOString() };
+  
+  state.scored[p.id] = { 
+    id: p.id, 
+    name: p.name, 
+    scores: finalScores, 
+    total, 
+    time: new Date().toISOString() 
+  };
+  
   saveToLocalStorage();
   state.currentSelections = {};
   if (state.idx < state.plans.length - 1) renderPlan(state.idx + 1);

@@ -355,7 +355,7 @@ async function tryFetchAll() {
 
   // 3. 尝试加载教案数据 (假设文件名是 teaching-plans.jsonl)
   try {
-    const r2 = await fetch('math.jsonl'); // 沿用原代码中的文件名
+    const r2 = await fetch('math_cleaned_answers_with_query.jsonl'); // 沿用原代码中的文件名
     if (!r2.ok) throw new Error('jsonl 缺失');
     const txt = await r2.text();
     parseJsonl(txt);
